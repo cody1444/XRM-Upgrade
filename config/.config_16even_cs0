@@ -1,0 +1,18 @@
+channel_indices = [0, 68, 136, 205, 273, 341, 409, 477, 546, 614, 682, 750, 818, 887, 955, 1023]
+expected_num_channels = 16
+
+mu_mean = 75.0
+mu_std = 15.0
+
+sig_y_primary_mean = 50.0
+sig_y_primary_std = 15.0
+
+sig_y_secondary_mean = 150.0
+sig_y_secondary_std = 20.0
+
+sig_y_primary_weight = 0.6
+
+noise_fraction = 0.1
+
+channel_shift_mean = 0.0
+channel_shift_std = 0.0
