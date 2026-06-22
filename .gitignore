@@ -3,6 +3,7 @@ training_data/
 validation_data/
 fake_histograms/
 generated_data/
+beam_profiles/
 *.npz
 *.npy
 *.root
