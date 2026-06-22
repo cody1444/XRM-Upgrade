@@ -1,3 +1,37 @@
+# XRM / ML generated data
+training_data/
+validation_data/
+fake_histograms/
+generated_data/
+*.npz
+*.npy
+*.root
+
+# Generated plots / figures
+plots/
+figures/
+figs/
+
+# ML training outputs
+checkpoints/
+models/
+saved_models/
+runs/
+tensorboard/
+*.keras
+*.h5
+*.ckpt*
+events.out.tfevents.*
+
+# Local project configs
+config/.config
+config/*.local
+
+# Scratch / temporary work
+scratch/
+tmp/
+temp/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
