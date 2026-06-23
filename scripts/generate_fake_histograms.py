@@ -14,7 +14,12 @@ def parse_args():
 
     parser.add_argument(
             'filename',
-            help="Input .npz file containing beam profiles"
+            help="Input .npz file containing beam profiles",
+            )
+
+    parser.add_argument(
+            'config',
+            help='Input .config file',
             )
 
     parser.add_argument(
@@ -22,27 +27,28 @@ def parse_args():
             '--count',
             default=1000,
             type=int,
-            help='Number of histograms to generate'
+            help='Number of histograms to generate',
             )
-
-    parser.add_argument(
-            '--config',
-            default=".config",
-            help='Config file for channel indices'
-    )
 
     parser.add_argument(
             '--seed',
             type=int,
             default=None,
-            help='Random seed for reproducible fake histograms.'
+            help='Random seed for reproducible fake histograms.',
+            )
+
+    parser.add_argument(
+            '--CS',
+            type=int,
+            default=None,
+            help='Fixed channel selection for validation data',
             )
 
     parser.add_argument(
             '-o',
             '--output-dir',
             default='fake_histograms',
-            help='Folder to store fake histograms'
+            help='Folder to store fake histograms',
             )
 
     return parser.parse_args()
@@ -65,9 +71,40 @@ def unpack_npz(filename):
 
     return smeprf, mu_axis, sig_axis, y_positions
 
-def validate_config(config, y_positions, mu_axis, sig_axis):
-    channel_indices = np.asarray(config["channel_indices"], dtype=int)
+def require_config_keys(config, required_keys):
+    missing_keys = []
 
+    for key in required_keys:
+        if key not in config:
+            missing_keys.append(key)
+
+    if missing_keys:
+        raise ValueError(
+            "Missing required config parameters: "
+            + ", ".join(missing_keys)
+        )
+
+def validate_config(config, y_positions, mu_axis, sig_axis):
+    required_keys = [
+        "channel_indices",
+        "expected_num_channels",
+        "mu_mean",
+        "mu_std",
+        "sig_y_primary_mean",
+        "sig_y_primary_std",
+        "sig_y_secondary_mean",
+        "sig_y_secondary_std",
+        "sig_y_primary_weight",
+        "noise_fraction",
+        "channel_shift_distribution",
+        "channel_shift_mean",
+        "channel_shift_std",
+        "channel_shift_min",
+        "channel_shift_max",
+    ]
+    require_config_keys(config, required_keys)
+
+    channel_indices = np.asarray(config["channel_indices"], dtype=int)
     expected_num_channels = int(config["expected_num_channels"])
 
     mu_mean = float(config["mu_mean"])
@@ -83,8 +120,11 @@ def validate_config(config, y_positions, mu_axis, sig_axis):
 
     noise_fraction = float(config["noise_fraction"])
 
+    channel_shift_distribution = str(config["channel_shift_distribution"]).strip().lower()
     channel_shift_mean = float(config["channel_shift_mean"])
     channel_shift_std = float(config["channel_shift_std"])
+    channel_shift_min = int(config["channel_shift_min"])
+    channel_shift_max = int(config["channel_shift_max"])
 
     if channel_indices.ndim != 1:
         raise ValueError("channel_indices must be one-dimensional.")
@@ -136,8 +176,17 @@ def validate_config(config, y_positions, mu_axis, sig_axis):
     if noise_fraction < 0:
         raise ValueError("noise_fraction must be non-negative")
 
+    if channel_shift_distribution not in ['gaussian', 'uniform']:
+        raise ValueError(
+                f"channel_shift_distribution must be set to gaussian or uniform, "
+                f"got {channel_shift_distribution}"
+        )
+
     if channel_shift_std < 0:
         raise ValueError("channel_shift_std must be non-negative.")
+    
+    if channel_shift_min > channel_shift_max:
+        raise ValueError("channel_shift_min is greater than channel_shift_max")
 
     return {
         "channel_indices": channel_indices,
@@ -150,9 +199,19 @@ def validate_config(config, y_positions, mu_axis, sig_axis):
         "sig_y_secondary_std": sig_y_secondary_std,
         "sig_y_primary_weight": sig_y_primary_weight,
         "noise_fraction": noise_fraction,
+        "channel_shift_distribution": channel_shift_distribution,
         "channel_shift_mean": channel_shift_mean,
         "channel_shift_std": channel_shift_std,
+        "channel_shift_min": channel_shift_min,
+        "channel_shift_max": channel_shift_max,
     }
+
+def validate_fixed_channel_shift(fixed_channel_shift):
+    if fixed_channel_shift == None:
+        return
+    
+    if abs(fixed_channel_shift) > 5:
+        raise ValueError("fixed_channel_shift must be between -5 and 5")
 
 def get_nearest_axis_index(axis, value):
     return np.argmin(np.abs(axis - value))
@@ -205,16 +264,24 @@ def sample_mu_and_sig_y(params, rng, mu_axis, sig_axis):
     return mu_sample, sig_y_sample
 
 def sample_channel_shift(params, rng):
-    max_shift = int(round(2 * params["channel_shift_std"]))
+    if params["channel_shift_distribution"] == 'gaussian':
+        while True:
+            shift = rng.normal(
+                    loc=params["channel_shift_mean"],
+                    scale=params["channel_shift_std"],
+            )
 
-    while True:
-        shift = rng.normal(
-                loc=params["channel_shift_mean"],
-                scale=params["channel_shift_std"],
+            if params["channel_shift_min"] <= shift <= params["channel_shift_max"]:
+                return int(np.round(shift))
+         
+    elif params["channel_shift_distribution"] == 'uniform':
+        return rng.integers(
+                low=params["channel_shift_min"],
+                high=params["channel_shift_max"]+1,
         )
 
-        if abs(shift) <= max_shift:
-            return int(np.round(shift))
+    else:
+        raise ValueError(f"Unexpected channel_shift_distribution: {params['channel_shift_distribution']}")
 
 def shift_histogram(hist, shift):
     shifted = np.zeros_like(hist)
@@ -253,6 +320,7 @@ def normalize_area(hist):
 
 def generate_training_data(smeprf, mu_axis, sig_axis, params, count, rng):
     num_channels = params["expected_num_channels"]
+    fixed_channel_shift = params["fixed_channel_shift"]
 
     histograms = np.empty((count, num_channels))
     template_mu_values = np.empty(count)
@@ -277,7 +345,10 @@ def generate_training_data(smeprf, mu_axis, sig_axis, params, count, rng):
             channel_indices=params["channel_indices"],
         )
 
-        channel_shift = sample_channel_shift(params, rng)
+        if fixed_channel_shift is not None:
+            channel_shift = fixed_channel_shift
+        else:
+            channel_shift = sample_channel_shift(params, rng)
         shifted_hist = shift_histogram(hist, channel_shift)
 
         noisy_hist = add_gaussian_noise(
@@ -372,7 +443,9 @@ def main():
     print(f"\tsmeprf shape: {smeprf.shape}\n")
 
     config = load_config(args.config)
+    validate_fixed_channel_shift(args.CS)
     params = validate_config(config, y_positions, mu_axis, sig_axis)
+    params["fixed_channel_shift"] = args.CS
 
     channel_indices = params["channel_indices"]
     mu_mean = params["mu_mean"]
@@ -383,8 +456,12 @@ def main():
     sig_y_secondary_std = params["sig_y_secondary_std"]
     sig_y_primary_weight = params["sig_y_primary_weight"]
     noise_fraction = params["noise_fraction"]
+    channel_shift_distribution = params["channel_shift_distribution"]
     channel_shift_mean = params["channel_shift_mean"]
     channel_shift_std = params["channel_shift_std"]
+    channel_shift_min = params["channel_shift_min"]
+    channel_shift_max = params["channel_shift_max"]
+    fixed_channel_shift = params["fixed_channel_shift"]
 
     print(f"Found .config file: {args.config}...")
     print("Current config settings:")
@@ -393,8 +470,19 @@ def main():
     print(f"\tsecondary sigma_y mean: {sig_y_secondary_mean}\tsecondary sigma_y std: {sig_y_secondary_std}")
     print(f"\tprimary sigma_y weight: {sig_y_primary_weight}")
     print(f"\tnoise_fraction: {noise_fraction}")
-    print(f"\tchannel_shift_mean: {channel_shift_mean}")
-    print(f"\tchannel_shift_std: {channel_shift_std}\n")
+    print(f"\tchannel shift distribution: {channel_shift_distribution}")
+    if channel_shift_distribution == "gaussian":
+        print(f"\tchannel_shift_mean: {channel_shift_mean}")
+        print(f"\tchannel_shift_std: {channel_shift_std}\n")
+        print(f"\tchannel_shift min: {channel_shift_min}")
+        print(f"\tchannel_shift max: {channel_shift_max}")
+    elif channel_shift_distribution == "uniform":
+        print(f"\t channel_shift_min: {channel_shift_min}")
+        print(f"\t channel_shif_max: {channel_shift_max}")
+    if fixed_channel_shift is None:
+        print(f"\tFixed channel shift: OFF")
+    else:
+        print(f"\tFixed channel shift: {fixed_channel_shift}")
     print(f"\tTotal selected channels: {len(channel_indices)}")
     print(f"\tSelected channels:\n\t{channel_indices}\n")
 
@@ -414,7 +502,10 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    output_file = output_dir / "fake_training_data.npz"
+    if fixed_channel_shift == None:
+        output_file = output_dir / "fake_training_data.npz"
+    else:
+        output_file = output_dir / "fake_validation_data.npz"
     np.savez(
         output_file,
         histograms=training_data["histograms"],
