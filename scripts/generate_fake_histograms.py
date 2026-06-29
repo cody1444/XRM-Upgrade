@@ -2,7 +2,6 @@
 
 import argparse
 import numpy as np
-import matplotlib.pyplot as plt
 from pathlib import Path
 
 def parse_args():
@@ -41,7 +40,7 @@ def parse_args():
             '--CS',
             type=int,
             default=None,
-            help='Fixed channel selection for validation data',
+            help='Fixed channel shift for validation data',
             )
 
     parser.add_argument(
@@ -207,7 +206,7 @@ def validate_config(config, y_positions, mu_axis, sig_axis):
     }
 
 def validate_fixed_channel_shift(fixed_channel_shift):
-    if fixed_channel_shift == None:
+    if fixed_channel_shift is None:
         return
     
     if abs(fixed_channel_shift) > 5:
@@ -323,6 +322,7 @@ def generate_training_data(smeprf, mu_axis, sig_axis, params, count, rng):
     fixed_channel_shift = params["fixed_channel_shift"]
 
     histograms = np.empty((count, num_channels))
+    raw_histograms = np.empty((count, num_channels))
     template_mu_values = np.empty(count)
     template_sig_y_values = np.empty(count)
     channel_shifts = np.empty(count, dtype=int)
@@ -360,76 +360,18 @@ def generate_training_data(smeprf, mu_axis, sig_axis, params, count, rng):
         fake_hist = normalize_area(noisy_hist)
 
         histograms[i, :] = fake_hist
+        raw_histograms[i, :] = noisy_hist
         template_mu_values[i] = mu_axis[mu_idx]
         template_sig_y_values[i] = sig_axis[sig_y_idx]
         channel_shifts[i] = channel_shift
 
     return {
         "histograms": histograms,
+        "raw_histograms": raw_histograms,
         "template_mu": template_mu_values,
         "template_sig_y": template_sig_y_values,
         "channel_shift": channel_shifts,
     }
-
-def plot_training_data_distributions(training_data, output_dir):
-    template_mu = training_data["template_mu"]
-    template_sig_y = training_data["template_sig_y"]
-    channel_shift = training_data["channel_shift"]
-
-    mu_bins = np.arange(template_mu.min() - 0.5, template_mu.max() + 1.5, 1)
-    sig_y_bins = np.arange(template_sig_y.min() - 0.5, template_sig_y.max() + 1.5, 1)
-
-    plt.figure()
-    plt.hist(template_mu, bins=mu_bins)
-    plt.xlabel("Template mu")
-    plt.ylabel("Count")
-    plt.title("Generated template mu distribution")
-    plt.tight_layout()
-    plt.savefig(output_dir / "template_mu_distribution.png", dpi=300)
-    plt.close()
-
-    plt.figure()
-    plt.hist(template_sig_y, bins=sig_y_bins)
-    plt.xlabel("Template sigma_y [um]")
-    plt.ylabel("Count")
-    plt.title("Generated template sigma_y distribution")
-    plt.tight_layout()
-    plt.savefig(output_dir / "template_sig_y_distribution.png", dpi=300)
-    plt.close()
-
-    plt.figure()
-    plt.hist(channel_shift, bins=np.arange(channel_shift.min() - 0.5, channel_shift.max() + 1.5, 1))
-    plt.xlabel("Channel shift")
-    plt.ylabel("Count")
-    plt.title("Generated channel shift distribution")
-    plt.tight_layout()
-    plt.savefig(output_dir / "channel_shift_distribution.png", dpi=300)
-    plt.close()
-
-def plot_template_vs_fake(
-    template_hist,
-    fake_hist,
-    output_filename,
-    template_mu,
-    template_sig_y,
-    channel_shift,
-):
-    channels = np.arange(len(template_hist))
-
-    plt.figure()
-    plt.plot(channels, template_hist, marker="o", label="Unshifted template")
-    plt.plot(channels, fake_hist, marker="o", label="Shifted noisy pseudo-data")
-
-    plt.xlabel("Selected channel index")
-    plt.ylabel("Normalized area")
-    plt.title(
-        f"Unshifted Template vs shifted fake histogram\n"
-        f"Template: mu={template_mu:.1f}, sigma_y={template_sig_y:.1f} um, channel shift={channel_shift}"
-    )
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(output_filename, dpi=300)
-    plt.close()
 
 def main():
     args = parse_args()
@@ -478,7 +420,7 @@ def main():
         print(f"\tchannel_shift max: {channel_shift_max}")
     elif channel_shift_distribution == "uniform":
         print(f"\t channel_shift_min: {channel_shift_min}")
-        print(f"\t channel_shif_max: {channel_shift_max}")
+        print(f"\t channel_shift_max: {channel_shift_max}")
     if fixed_channel_shift is None:
         print(f"\tFixed channel shift: OFF")
     else:
@@ -509,11 +451,11 @@ def main():
     np.savez(
         output_file,
         histograms=training_data["histograms"],
+        raw_histograms=training_data["raw_histograms"],
         template_mu=training_data["template_mu"],
         template_sig_y=training_data["template_sig_y"],
         channel_shift=training_data["channel_shift"],
     )
-    plot_training_data_distributions(training_data, output_dir)
 
     print(f"Saved training data to {output_file}")
 
