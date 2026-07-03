@@ -1,4 +1,26 @@
+from pathlib import Path
 import numpy as np
+import matplotlib.pyplot as plt
+import argparse
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+            prog='channel_selection',
+            description='provides channel indices from a beam profile library',
+            epilog='Run with an .npz containing the beam profiles'
+            )
+
+    parser.add_argument(
+            'filename',
+            help="Input .npz file containing the beam profiles",
+            )
+
+    parser.add_argument(
+            'output_dir',
+            help='Folder to store plots',
+            )
+
+    return parser.parse_args()
 
 def validate_channels_and_positions(n_channels, n_positions):
     if n_channels <= 0:
@@ -38,3 +60,77 @@ def window_channels(center, width, n_channels=16, n_positions=1024):
         )
 
     return indices.tolist()
+
+def get_sig_y_sdev(smeprf):
+    profiles = smeprf['smeprf']
+
+    y_positions = smeprf['y_positions']
+    mu_axis = smeprf['mu_axis']
+    sig_y_stdev = np.empty((len(mu_axis), len(y_positions)))
+
+    for mu_idx in range(len(mu_axis)):
+        for y_idx in range(len(y_positions)):
+            amplitudes_over_sig_y = profiles[mu_idx,:,y_idx]
+            sig_y_stdev[mu_idx, y_idx] = np.std(amplitudes_over_sig_y)
+
+    return sig_y_stdev
+
+def rank_channels(sig_y_stdev):
+    num_of_channels = sig_y_stdev.shape[1]
+    channel_scores = np.empty(num_of_channels)
+
+    for y_idx in range(num_of_channels):
+        channel_scores[y_idx] = np.mean(sig_y_stdev[:,y_idx])
+
+    ranked_indices = np.argsort(channel_scores)[::-1]
+
+    return channel_scores, ranked_indices
+
+def plot_channel_scores(y_positions, channel_scores, ranked_indices=None, top_n=16):
+    plt.figure(figsize=(10, 5))
+
+    plt.plot(
+        y_positions,
+        channel_scores,
+        linewidth=1.5,
+        label=r"Channel score"
+    )
+
+    if ranked_indices is not None:
+        top_indices = ranked_indices[:top_n]
+
+        plt.scatter(
+            y_positions[top_indices],
+            channel_scores[top_indices],
+            s=30,
+            label=f"Top {top_n} channels",
+            zorder=3,
+        )
+
+    plt.xlabel("y position")
+    plt.ylabel(r"Mean std. dev. over $\sigma_y$")
+    plt.title(r"Channel score versus y position")
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+    
+def plot_heatmap(sig_y_stdev, bins):
+    pass
+
+def main():
+    args = parse_args()
+
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    beam_profiles = np.load(args.filename)
+    y_positions = beam_profiles['y_positions']
+    
+
+    sig_y_sdev = get_sig_y_sdev(beam_profiles)
+    channel_scores, ranked_indices = rank_channels(sig_y_sdev)
+
+    plot_channel_scores(y_positions, channel_scores, ranked_indices)
+
+if __name__ == "__main__":
+    main()
