@@ -117,6 +117,25 @@ def plot_channel_scores(y_positions, channel_scores, ranked_indices=None, top_n=
 def plot_heatmap(sig_y_stdev, bins):
     pass
 
+def make_test_smeprf_for_channel_score_plot(smeprf):
+    profiles = smeprf["smeprf"]
+
+    num_mu, num_sigma, num_channels = profiles.shape
+
+    raw = np.arange(num_sigma)
+    template_col = (raw - raw.mean()) / raw.std()
+
+    period = num_channels // 2
+    scalars = 1e-6 * (np.arange(num_channels) % period)
+
+    one_mu_slice = template_col[:, None] * scalars[None, :]
+    test_profiles = np.repeat(one_mu_slice[None, :, :], repeats=num_mu, axis=0)
+
+    test_smeprf = dict(smeprf)
+    test_smeprf["smeprf"] = test_profiles
+
+    return test_smeprf
+
 def main():
     args = parse_args()
 
@@ -125,9 +144,11 @@ def main():
 
     beam_profiles = np.load(args.filename)
     y_positions = beam_profiles['y_positions']
+    test_data = make_test_smeprf_for_channel_score_plot(beam_profiles)
     
 
-    sig_y_sdev = get_sig_y_sdev(beam_profiles)
+    #sig_y_sdev = get_sig_y_sdev(beam_profiles)
+    sig_y_sdev = get_sig_y_sdev(test_data)
     channel_scores, ranked_indices = rank_channels(sig_y_sdev)
 
     plot_channel_scores(y_positions, channel_scores, ranked_indices)
