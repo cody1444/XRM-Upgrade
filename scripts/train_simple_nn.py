@@ -17,8 +17,13 @@ def parse_args():
             )
 
     parser.add_argument(
-            "filename",
+            "training_data",
             help="Input .npz file containing fake training data."
+            )
+
+    parser.add_argument(
+            "validation_data",
+            help="Input .npz file containing fake validation data."
             )
 
     parser.add_argument(
@@ -37,7 +42,7 @@ def parse_args():
 
     return parser.parse_args()
 
-def load_training_data(filename):
+def load_data(filename):
     HISTOGRAMS_KEY = "histograms"
     MU_KEY = "template_mu"
     SIG_Y_KEY = "template_sig_y"
@@ -91,7 +96,7 @@ def build_model(input_dim, output_dim):
 
     return model
 
-def train_one_model(X_train, X_val, y_train, y_val, seed, epochs, batch_size):
+def train_one_model(X_train, X_val, y_train, y_val, seed, epochs, batch_size, make_plots=False):
     keras.utils.set_random_seed(seed)
 
     model = build_model(
@@ -110,7 +115,16 @@ def train_one_model(X_train, X_val, y_train, y_val, seed, epochs, batch_size):
 
     val_loss, val_mae = model.evaluate(X_val, y_val, verbose=0)
 
-    y_pred = model.predict(X_val, verbose=0)
+    y_pred = model.predict(X_val, verbose=1)
+
+    if make_plots:
+        plot_training_history(history, f"training_convergence.png")
+
+        make_diagnostic_plots(
+            y_pred,
+            y_val,
+            "prediction_diagnostics.png",
+        )
     diagnostic_results = get_regression_diagnostics(
         y_pred,
         y_val, 
@@ -165,21 +179,37 @@ def summarize_runs(results):
             f"{values.mean():.4f} ± {values.std(ddof=1):.4f}"
         )
 
-def make_diagnostic_plots(y_pred, y_true):
+def make_diagnostic_plots(y_pred, y_true, output_filename):
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
 
     axes[0].scatter(y_true[:, 0], y_pred[:, 0], s=5)
-    axes[0].set_xlabel("True mu")
-    axes[0].set_ylabel("Predicted mu")
+    axes[0].set_xlabel("True mu [um]")
+    axes[0].set_ylabel("Predicted mu [um]")
     axes[0].set_title("mu prediction")
 
     axes[1].scatter(y_true[:, 1], y_pred[:, 1], s=5)
-    axes[1].set_xlabel("True sig_y")
-    axes[1].set_ylabel("Predicted sig_y")
+    axes[1].set_xlabel("True sig_y [um]")
+    axes[1].set_ylabel("Predicted sig_y [um]")
     axes[1].set_title("sig_y prediction")
 
     plt.tight_layout()
-    plt.show()
+    plt.savefig(output_filename, dpi=300)
+    plt.close()
+
+def plot_training_history(history, output_filename):
+    epochs = np.arange(1, len(history.history["loss"]) + 1)
+
+    plt.figure()
+    plt.scatter(epochs, history.history["loss"], label="training loss")
+    plt.scatter(epochs, history.history["val_loss"], label="validation loss")
+
+    plt.xlabel("Epoch")
+    plt.ylabel("MSE loss")
+    plt.title("Training convergence")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_filename, dpi=300)
+    plt.close()
 
 def summarize_array(name, array):
     print(f"{name} shape: {array.shape}")
@@ -187,11 +217,10 @@ def summarize_array(name, array):
 
 def main():
     args = parse_args()
-    X, y = load_training_data(args.filename)
-    X_train, X_val, y_train, y_val = train_val_split(X, y)
 
-    summarize_array("X", X)
-    summarize_array("y", y)
+    X_train, y_train = load_data(args.training_data)
+    X_val, y_val = load_data(args.validation_data)
+
     summarize_array("X_train", X_train)
     summarize_array("y_train", y_train)
     summarize_array("X_val", X_val)
@@ -200,7 +229,7 @@ def main():
     seeds = [101, 102, 103, 104, 105]
     results = []
 
-    for seed in seeds:
+    for i,seed in enumerate(seeds):
         print(f"\nTraining run with seed {seed}")
 
         result = train_one_model(
@@ -211,6 +240,7 @@ def main():
             seed=seed,
             epochs=args.epochs,
             batch_size=args.batch_size,
+            make_plots=(i==0),
         )
 
         results.append(result)
@@ -221,9 +251,6 @@ def main():
         print(f"sig_y RMSE: {result['sig_y_rmse']:.4f}")
 
     summarize_runs(results)
-
-
-
 
 if __name__ == "__main__":
     main()
