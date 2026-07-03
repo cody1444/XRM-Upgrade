@@ -44,7 +44,7 @@ def get_min_and_max(axis):
     return  np.min(axis), np.max(axis)
 
 def get_bins(min, max):
-    bins = np.arange(min - 0.5, max + 1.5, 1)
+    bins = np.arange(min - 0.5, max + 1, 1)
     return bins
 
 def plot_histogram(template, axis, output_dir, type):
@@ -95,6 +95,11 @@ def shift_profile(profile, shift):
 
     return shifted
 
+def shift_profile_in_y_position_space(profile, channel_shift):
+    # Positive channel_shift means move toward larger y_position.
+    # Because y_positions decreases with array index, flip the sign.
+    return shift_profile(profile, -channel_shift)
+
 def plot_random_hist(training_data, beam_profiles, rng, output_dir, config):
     random_event_index = get_random_event_index(training_data, rng)
     channel_indices = np.asarray(config['channel_indices'], dtype = int)
@@ -116,35 +121,47 @@ def plot_random_hist(training_data, beam_profiles, rng, output_dir, config):
     )
 
     true_profile = beam_profiles['smeprf'][mu_i, sig_y_i, :]
-    shifted_profile = shift_profile(true_profile, random_channel_shift)
+    shifted_profile = shift_profile_in_y_position_space(true_profile, random_channel_shift)
     y_positions = beam_profiles['y_positions']
+    y_positions_mm = y_positions * 1e3
 
     plt.figure()
 
     plt.fill_between(
-        y_positions,
+        y_positions_mm,
         true_profile,
         alpha=0.2,
-        label="original noiseless profile"
+        label="original noiseless profile",
     )
 
     plt.plot(
-        y_positions,
+        y_positions_mm,
         shifted_profile, 
         label=f"shifted noiseless profile (shift = {random_channel_shift})", 
         linewidth=0.5,
-        markersize=2
+        markersize=2,
+        color="orange"
+    )
+
+    plt.vlines(
+        x=y_positions_mm[channel_indices],
+        ymin=shifted_profile[channel_indices],
+        ymax=noisy_points[channel_indices],
+        linestyles="dotted",
+        linewidth=0.6,
+        alpha=0.6,
+        color="orange"
     )
 
     plt.scatter(
-        y_positions[channel_indices],
-        noisy_points,
-        marker="x",
-        s=25,
+        y_positions_mm[channel_indices],
+        noisy_points[channel_indices],
+        marker="o",
+        s=1,
         label="shifted noisy data",
     )
 
-    plt.xlabel("y position")
+    plt.xlabel("y position [mm]")
     plt.ylabel("Amplitude")
     plt.title(
         f"Original profile shadow\n"

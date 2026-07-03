@@ -159,7 +159,7 @@ def validate_config(config, y_positions, mu_axis, sig_axis):
             f"sig_y_secondary_mean={sig_y_secondary_mean} is outside available "
             f"sig_axis range {sig_axis.min()} to {sig_axis.max()}."
         ) 
-    
+
     if mu_std <= 0:
         raise ValueError("mu_std must be positive.")
 
@@ -272,7 +272,7 @@ def sample_channel_shift(params, rng):
 
             if params["channel_shift_min"] <= shift <= params["channel_shift_max"]:
                 return int(np.round(shift))
-         
+ 
     elif params["channel_shift_distribution"] == 'uniform':
         return rng.integers(
                 low=params["channel_shift_min"],
@@ -282,17 +282,22 @@ def sample_channel_shift(params, rng):
     else:
         raise ValueError(f"Unexpected channel_shift_distribution: {params['channel_shift_distribution']}")
 
-def shift_histogram(hist, shift):
-    shifted = np.zeros_like(hist)
+def shift_profile(profile, shift):
+    shifted = np.zeros_like(profile)
 
     if shift > 0:
-        shifted[shift:] = hist[:-shift]
+        shifted[shift:] = profile[:-shift]
     elif shift < 0:
-        shifted[:shift] = hist[-shift:]
+        shifted[:shift] = profile[-shift:]
     else:
-        shifted = hist.copy()
+        shifted = profile.copy()
 
     return shifted
+
+def shift_profile_in_y_position_space(profile, channel_shift):
+    # Positive channel_shift means move toward larger y_position.
+    # Because y_positions decreases with array index, flip the sign.
+    return shift_profile(profile, -channel_shift)
 
 def profile_to_histogram(profile, channel_indices):
     return profile[channel_indices]
@@ -320,9 +325,10 @@ def normalize_area(hist):
 def generate_training_data(smeprf, mu_axis, sig_axis, params, count, rng):
     num_channels = params["expected_num_channels"]
     fixed_channel_shift = params["fixed_channel_shift"]
+    num_sensor_channels = len(smeprf[0, 0, :])
 
     histograms = np.empty((count, num_channels))
-    raw_histograms = np.empty((count, num_channels))
+    raw_histograms = np.empty((count, num_sensor_channels))
     template_mu_values = np.empty(count)
     template_sig_y_values = np.empty(count)
     channel_shifts = np.empty(count, dtype=int)
@@ -340,27 +346,27 @@ def generate_training_data(smeprf, mu_axis, sig_axis, params, count, rng):
 
         profile = smeprf[mu_idx, sig_y_idx, :]
 
-        hist = profile_to_histogram(
-            profile=profile,
-            channel_indices=params["channel_indices"],
-        )
-
         if fixed_channel_shift is not None:
             channel_shift = fixed_channel_shift
         else:
             channel_shift = sample_channel_shift(params, rng)
-        shifted_hist = shift_histogram(hist, channel_shift)
+        shifted_profile = shift_profile_in_y_position_space(profile, channel_shift)
 
-        noisy_hist = add_gaussian_noise(
-            hist=shifted_hist,
+        noisy_shifted_profile = add_gaussian_noise(
+            hist=shifted_profile,
             noise_fraction=params["noise_fraction"],
             rng=rng,
         )
 
-        fake_hist = normalize_area(noisy_hist)
+        hist = profile_to_histogram(
+            profile=noisy_shifted_profile,
+            channel_indices=params["channel_indices"],
+        )
+
+        fake_hist = normalize_area(hist)
 
         histograms[i, :] = fake_hist
-        raw_histograms[i, :] = noisy_hist
+        raw_histograms[i, :] = noisy_shifted_profile
         template_mu_values[i] = mu_axis[mu_idx]
         template_sig_y_values[i] = sig_axis[sig_y_idx]
         channel_shifts[i] = channel_shift
