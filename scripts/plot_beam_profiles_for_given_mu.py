@@ -9,6 +9,7 @@ parser = argparse.ArgumentParser(
         )
 
 parser.add_argument('filename')
+
 parser.add_argument('mu_index', type=int, default=0)
 
 args = parser.parse_args()
@@ -49,6 +50,7 @@ for sig_index in range(len(sig_axis)):
             linewidth = 1.3
 
         plt.plot(
+            y_positions,
             profile,
             linewidth=linewidth,
             color=color_map[sig_index],
@@ -57,6 +59,7 @@ for sig_index in range(len(sig_axis)):
 
     else:
         plt.plot(
+            y_positions,
             profile,
             alpha=0.50,
             color="gray",
