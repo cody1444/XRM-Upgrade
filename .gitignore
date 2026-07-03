@@ -1,3 +1,5 @@
+# Pyright config
+pyrightconfig.json
 # XRM / ML generated data
 training_data/
 validation_data/
