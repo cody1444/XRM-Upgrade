@@ -6,6 +6,7 @@ validation_data/
 fake_histograms/
 generated_data/
 beam_profiles/
+scratch/
 *.npz
 *.npy
 *.root
