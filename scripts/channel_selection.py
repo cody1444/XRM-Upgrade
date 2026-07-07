@@ -16,6 +16,12 @@ def parse_args():
             )
 
     parser.add_argument(
+            '--test_data',
+            action='store_true',
+            help="Plot score for dummy, sawtooth data",
+            )
+
+    parser.add_argument(
             'output_dir',
             help='Folder to store plots',
             )
@@ -144,11 +150,13 @@ def main():
 
     beam_profiles = np.load(args.filename)
     y_positions = beam_profiles['y_positions']
-    test_data = make_test_smeprf_for_channel_score_plot(beam_profiles)
-    
 
-    #sig_y_sdev = get_sig_y_sdev(beam_profiles)
-    sig_y_sdev = get_sig_y_sdev(test_data)
+    if args.test_data is True:
+        test_data = make_test_smeprf_for_channel_score_plot(beam_profiles)
+        sig_y_sdev = get_sig_y_sdev(test_data)
+
+    else:
+        sig_y_sdev = get_sig_y_sdev(beam_profiles)
     channel_scores, ranked_indices = rank_channels(sig_y_sdev)
 
     plot_channel_scores(y_positions, channel_scores, ranked_indices)
