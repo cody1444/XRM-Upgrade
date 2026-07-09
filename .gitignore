@@ -1,5 +1,6 @@
 # Pyright config
 pyrightconfig.json
+
 # XRM / ML generated data
 training_data/
 validation_data/
@@ -28,8 +29,7 @@ tensorboard/
 events.out.tfevents.*
 
 # Local project configs
-config/.config
-config/*.local
+config/
 
 # Scratch / temporary work
 scratch/
