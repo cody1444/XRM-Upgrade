@@ -4,6 +4,12 @@ import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
+from generate_fake_histograms import (
+    apply_channel_shift,
+    normalize_area,
+    get_axis_index,
+    load_config,
+)
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -24,8 +30,8 @@ def parse_args():
 
     parser.add_argument(
             'config',
-            help="Input .config file containing event statistics"
-            )
+            help="Input .config file"
+    )
 
     parser.add_argument(
             'output_dir',
@@ -34,12 +40,6 @@ def parse_args():
 
     return parser.parse_args()
 
-def load_config(filename):
-    namespace = {}
-    with open(filename, "r") as f:
-        exec(f.read(), namespace)
-    return namespace
-
 def get_min_and_max(axis):
     return  np.min(axis), np.max(axis)
 
@@ -47,13 +47,15 @@ def get_bins(min, max):
     bins = np.arange(min - 0.5, max + 1, 1)
     return bins
 
-def plot_histogram(template, axis, output_dir, type):
+def plot_histogram(true_vals, axis, output_dir, type):
     min, max = get_min_and_max(axis)
     bins = get_bins(min, max)
-    num_events = len(template)
+    print(f"{type} bins:")
+    print(bins)
+    num_events = len(true_vals)
 
     plt.figure()
-    plt.hist(template, bins=bins, label=f"N = {num_events}")
+    plt.hist(true_vals, bins=bins, label=f"N = {num_events}")
     if type == "channel shift":
         plt.xlabel(f"{type} [n]")
     else:
@@ -74,36 +76,39 @@ def get_axis_index(axis, value):
     return matches[0]
 
 def get_random_event_index(training_data, rng):
-    num_events = len(training_data["histograms"])
+    num_events = len(training_data["x_data"])
     return rng.integers(low=0, high=num_events)
 
 def get_random_targets(training_data, random_event_index):
-    random_template_mu = training_data['template_mu'][random_event_index]
-    random_template_sig_y = training_data['template_sig_y'][random_event_index]
+    random_template_mu = training_data['true_mu'][random_event_index]
+    random_template_sig_y = training_data['true_sig_y'][random_event_index]
     random_channel_shift = training_data['channel_shift'][random_event_index]
     return random_template_mu, random_template_sig_y, random_channel_shift
 
-def shift_profile(profile, shift):
-    shifted = np.zeros_like(profile)
+def get_shifted_template_for_event(
+    event_idx,
+    training_data,
+    profiles,
+    mu_axis,
+    sig_axis,
+):
+    true_mu = training_data["true_mu"][event_idx]
+    true_sig_y = training_data["true_sig_y"][event_idx]
+    channel_shift = int(training_data["channel_shift"][event_idx])
 
-    if shift > 0:
-        shifted[shift:] = profile[:-shift]
-    elif shift < 0:
-        shifted[:shift] = profile[-shift:]
-    else:
-        shifted = profile.copy()
+    mu_idx = get_axis_index(mu_axis, true_mu)
+    sig_y_idx = get_axis_index(sig_axis, true_sig_y)
 
-    return shifted
+    template = profiles[mu_idx, sig_y_idx, :]
+    shifted_template = apply_channel_shift(template, channel_shift)
+    normalized_template = normalize_area(shifted_template)
 
-def shift_profile_in_y_position_space(profile, channel_shift):
-    # Positive channel_shift means move toward larger y_position.
-    # Because y_positions decreases with array index, flip the sign.
-    return shift_profile(profile, -channel_shift)
+    return normalized_template
 
-def plot_random_hist(training_data, beam_profiles, rng, output_dir, config):
+def plot_random_hist(training_data, beam_profiles, rng, output_dir):
     random_event_index = get_random_event_index(training_data, rng)
-    channel_indices = np.asarray(config['channel_indices'], dtype = int)
-    noisy_points = training_data['raw_histograms'][random_event_index]
+
+    noisy_points = training_data['x_data'][random_event_index]
     
     random_template_mu, random_template_sig_y, random_channel_shift = get_random_targets(
         training_data, 
@@ -121,44 +126,41 @@ def plot_random_hist(training_data, beam_profiles, rng, output_dir, config):
     )
 
     true_profile = beam_profiles['smeprf'][mu_i, sig_y_i, :]
-    shifted_profile = shift_profile_in_y_position_space(true_profile, random_channel_shift)
-    y_positions = beam_profiles['y_positions']
+    true_profile = normalize_area(true_profile)
+    
+    shifted_profile = get_shifted_template_for_event(
+        random_event_index, 
+        training_data,
+        beam_profiles["smeprf"], 
+        beam_profiles["mu_axis"],
+        beam_profiles["sig_axis"],
+    )
+
+    y_positions = beam_profiles["y_positions"]
     y_positions_mm = y_positions * 1e3
 
     plt.figure()
 
     plt.fill_between(
-        y_positions_mm,
-        true_profile,
+        y_positions_mm[::-1],
+        true_profile[::-1],
         alpha=0.2,
-        label="original noiseless profile",
+        label="true profile",
     )
 
-    plt.plot(
-        y_positions_mm,
-        shifted_profile, 
-        label=f"shifted noiseless profile (shift = {random_channel_shift})", 
-        linewidth=0.5,
-        markersize=2,
-        color="orange"
-    )
-
-    plt.vlines(
-        x=y_positions_mm[channel_indices],
-        ymin=shifted_profile[channel_indices],
-        ymax=noisy_points[channel_indices],
-        linestyles="dotted",
-        linewidth=0.6,
-        alpha=0.6,
-        color="orange"
+    plt.fill_between(
+        y_positions_mm[::-1],
+        shifted_profile[::-1],
+        alpha=0.3,
+        label="shifted profile"
     )
 
     plt.scatter(
-        y_positions_mm[channel_indices],
-        noisy_points[channel_indices],
+        y_positions_mm[::-1],
+        noisy_points[::-1],
         marker="o",
         s=1,
-        label="shifted noisy data",
+        label="training data",
     )
 
     plt.xlabel("y position [mm]")
@@ -167,13 +169,10 @@ def plot_random_hist(training_data, beam_profiles, rng, output_dir, config):
         f"Original profile shadow\n"
         f"event={random_event_index}, "
         f"mu={random_template_mu:.1f} um, "
-        f"sig_y={random_template_sig_y:.1f} um"
+        f"sig_y={random_template_sig_y:.1f} um, "
+        f"shift={random_channel_shift}"
     )
-    plt.legend(
-        loc="upper left",
-        bbox_to_anchor=(1.02, 1.0),
-        borderaxespad=0,
-    )
+    plt.legend(loc="upper right")
     plt.tight_layout()
     plt.savefig(
         output_dir / f"event_{random_event_index:05d}_profile_shadow.png",
@@ -190,24 +189,25 @@ def main():
 
     training_data = np.load(args.filename)
     beam_profiles = np.load(args.beam_profiles)
+    config = load_config(args.config)
 
-    template_mu = training_data['template_mu']
+    template_mu = training_data['true_mu']
     mu_axis = beam_profiles['mu_axis']
     plot_histogram(template_mu, mu_axis, output_dir, "mu")
 
-    template_sig_y = training_data['template_sig_y']
+    template_sig_y = training_data['true_sig_y']
     sig_y_axis = beam_profiles['sig_axis']
     plot_histogram(template_sig_y, sig_y_axis, output_dir, "sig_y")
 
-    config = load_config(args.config)
     template_channel_shift = training_data['channel_shift']
-    channel_shift_min = float(config['channel_shift_min'])
-    channel_shift_max = float(config['channel_shift_max'])
+    shift_component = config["channel_shift_distribution"]["components"][0]
+    channel_shift_min = int(shift_component['min'])
+    channel_shift_max = int(shift_component['max'])
     channel_shift_axis = np.arange(channel_shift_min, channel_shift_max + 1, 1)
     plot_histogram(template_channel_shift, channel_shift_axis, output_dir, "channel shift")
 
     rng = np.random.default_rng()
-    plot_random_hist(training_data, beam_profiles, rng, output_dir, config)
+    plot_random_hist(training_data, beam_profiles, rng, output_dir)
 
 
 if __name__ == "__main__":

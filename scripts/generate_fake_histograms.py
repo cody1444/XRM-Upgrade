@@ -136,8 +136,13 @@ def validate_fixed_channel_shift(fixed_channel_shift):
     if abs(fixed_channel_shift) > 5:
         raise ValueError("fixed_channel_shift must be between -5 and 5")
 
-def get_nearest_axis_index(axis, value):
-    return np.argmin(np.abs(axis - value))
+def get_axis_index(axis, value):
+    matches = np.where(axis == value)[0]
+
+    if len(matches) != 1:
+        raise ValueError(f"Expected one match for {value}, got {len(matches)}")
+
+    return matches[0]
 
 def sample_distribution(rng, dist_config, size):
     """Sample from a possibly multi-component distribution."""
@@ -167,9 +172,9 @@ def sample_distribution(rng, dist_config, size):
         dist_type = component["type"]
 
         if dist_type == "uniform":
-            samples[mask] = rng.uniform(
-                low=component["min"],
-                high=component["max"],
+            samples[mask] = rng.integers(
+                low=int(component["min"]),
+                high=int(component["max"]) + 1,
                 size=n_samples,
             )
 
@@ -202,6 +207,8 @@ def sample_truncated_gaussian(rng, mean, std, low, high, size):
         )
 
         accepted = proposal[(proposal >= low) & (proposal <= high)]
+        accepted = np.rint(accepted)
+        accepted = np.clip(accepted, low, high)
 
         n_accept = min(len(accepted), needed)
         samples[filled:filled + n_accept] = accepted[:n_accept]
@@ -213,9 +220,9 @@ def apply_channel_shift(profile, shift):
     shifted = np.zeros_like(profile)
 
     if shift > 0:
-        shifted[shift:] = profile[:-shift]
+        shifted[:-shift] = profile[shift:]
     elif shift < 0:
-        shifted[:shift] = profile[-shift:]
+        shifted[-shift:] = profile[:shift]
     else:
         shifted = profile.copy()
 
@@ -268,9 +275,6 @@ def generate_training_data(
             dist_config=config["channel_shift_distribution"],
             size=count,
         )
-
-        channel_shifts = np.rint(channel_shifts).astype(int)
-
     else:
         channel_shifts = np.full(count, fixed_channel_shift, dtype=int)
 
@@ -281,12 +285,12 @@ def generate_training_data(
     y_data = np.empty((count, 2), dtype=np.float32)
 
     for event_idx in range(count):
-        mu = mu_values[event_idx]
-        sig_y = sig_y_values[event_idx]
-        channel_shift = channel_shifts[event_idx]
+        mu_true = float(mu_values[event_idx])
+        sig_y_true = float(sig_y_values[event_idx])
+        channel_shift = int(channel_shifts[event_idx])
 
-        mu_idx = get_nearest_axis_index(mu_axis, mu)
-        sig_y_idx = get_nearest_axis_index(sig_axis, sig_y)
+        mu_idx = get_axis_index(mu_axis, mu_true)
+        sig_y_idx = get_axis_index(sig_axis, sig_y_true)
 
         full_profile = profiles[mu_idx, sig_y_idx, :]
 
@@ -304,7 +308,7 @@ def generate_training_data(
         normalized_profile = normalize_area(noisy_profile)
 
         x_data[event_idx, :] = normalized_profile
-        y_data[event_idx, :] = [mu, sig_y]
+        y_data[event_idx, :] = [mu_true, sig_y_true]
 
     return x_data, y_data, channel_shifts
 
