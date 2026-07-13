@@ -3,9 +3,7 @@
 import argparse
 import numpy as np
 import tensorflow as tf
-import matplotlib.pyplot as plt
 from tensorflow import keras
-from tensorflow.keras import layers
 
 print("TensorFlow version:", tf.__version__)
 print("GPUs:", tf.config.list_physical_devices("GPU"))
@@ -27,6 +25,11 @@ def parse_args():
             )
 
     parser.add_argument(
+            "channel_selections",
+            help="Input .npz file containing the channel selections"
+    )
+
+    parser.add_argument(
             "--epochs",
             type=int,
             default=50,
@@ -43,48 +46,29 @@ def parse_args():
     return parser.parse_args()
 
 def load_data(filename):
-    HISTOGRAMS_KEY = "histograms"
-    MU_KEY = "template_mu"
-    SIG_Y_KEY = "template_sig_y"
-    #SHIFT_KEY = "channel_shift"
-
     data = np.load(filename)
 
-    X = data[HISTOGRAMS_KEY].astype("float32")
+    X = data["x_data"].astype("float32")
 
     y = np.column_stack([
-        data[MU_KEY],
-        data[SIG_Y_KEY],
+        data["true_mu"],
+        data["true_sig_y"],
         ]).astype("float32")
 
     return X, y
 
-def train_val_split(X, y, val_fraction=0.2, seed=123):
-    rng = np.random.default_rng(seed)
+def load_channel_selections(filename):
+    data = np.load(filename)
+    channel_selections = data["channel_selections"]
 
-    n_samples = len(X)
-    indices = np.arange(n_samples)
-    rng.shuffle(indices)
-
-    n_val = int(val_fraction * n_samples)
-
-    val_indices = indices[:n_val]
-    train_indices = indices[n_val:]
-
-    X_train = X[train_indices]
-    y_train = y[train_indices]
-
-    X_val = X[val_indices]
-    y_val = y[val_indices]
-
-    return X_train, X_val, y_train, y_val
+    return channel_selections
 
 def build_model(input_dim, output_dim):
     model = keras.Sequential([
         keras.layers.Input(shape=(input_dim, )),
-        keras.layers.Dense(64, activation="relu"),
-        keras.layers.Dense(64, activation="relu"),
         keras.layers.Dense(32, activation="relu"),
+        keras.layers.Dense(32, activation="relu"),
+        keras.layers.Dense(16, activation="relu"),
         keras.layers.Dense(output_dim)
     ])
     
@@ -96,7 +80,30 @@ def build_model(input_dim, output_dim):
 
     return model
 
-def train_one_model(X_train, X_val, y_train, y_val, seed, epochs, batch_size, make_plots=False):
+def mask_x_data_by_channel_selection(x_data, channel_indices):
+    channel_indices = np.asarray(channel_indices, dtype=int)
+
+    if x_data.ndim != 2:
+        raise ValueError(f"x_data must be 2D, got shape {x_data.shape}")
+
+    if channel_indices.ndim != 1:
+        raise ValueError(
+            f"channel_indices must be 1D, got shape {channel_indices.shape}"
+        )
+
+    if np.any(channel_indices < 0):
+        raise ValueError("channel_indices contains negative indices")
+
+    if np.any(channel_indices >= x_data.shape[1]):
+        raise ValueError(
+            "channel_indices contains values outside the x_data channel range. "
+            f"x_data has {x_data.shape[1]} channels, "
+            f"max channel index is {channel_indices.max()}."
+        )
+
+    return x_data[:, channel_indices]
+
+def train_one_model(X_train, X_val, y_train, y_val, seed, epochs, batch_size):
     keras.utils.set_random_seed(seed)
 
     model = build_model(
@@ -104,116 +111,35 @@ def train_one_model(X_train, X_val, y_train, y_val, seed, epochs, batch_size, ma
         output_dim=y_train.shape[1],
     )
 
-    history = model.fit(
+    early_stopping = keras.callbacks.EarlyStopping(
+        monitor="val_loss",
+        patience=3,
+    )
+
+    model.fit(
         X_train,
         y_train,
         validation_data=(X_val, y_val),
         epochs=epochs,
         batch_size=batch_size,
+        callbacks=[early_stopping],
         verbose=0,
     )
 
-    val_loss, val_mae = model.evaluate(X_val, y_val, verbose=0)
+    y_pred = model.predict(X_val, verbose=0)
 
-    y_pred = model.predict(X_val, verbose=1)
-
-    if make_plots:
-        plot_training_history(history, f"training_convergence.png")
-
-        make_diagnostic_plots(
-            y_pred,
-            y_val,
-            "prediction_diagnostics.png",
-        )
-    diagnostic_results = get_regression_diagnostics(
-        y_pred,
-        y_val, 
-        should_print=False,
+    sig_y_mae = np.mean(
+        np.abs(y_pred[:, 1] - y_val[:, 1])
     )
 
     return {
-            "val_loss": val_loss,
-            "val_mae": val_mae,
-            "mu_mae": diagnostic_results["mu_mae"],
-            "sig_y_mae": diagnostic_results["sig_y_mae"],
-            "mu_rmse": diagnostic_results["mu_rmse"],
-            "sig_y_rmse": diagnostic_results["sig_y_rmse"],
+        "sig_y_mae": sig_y_mae,
     }
-
-def get_regression_diagnostics(y_pred, y_true, should_print=False):
-    error = y_pred - y_true
-
-    mae = np.mean(np.abs(error), axis=0)
-    rmse = np.sqrt(np.mean(error**2, axis=0))
-
-    results = {
-        "mu_mae": mae[0], 
-        "sig_y_mae": mae[1],
-        "mu_rmse": rmse[0],
-        "sig_y_rmse": rmse[1],
-    }
-
-    if should_print:
-        print(f"mu MAE: {results['mu_mae']:.4f}")
-        print(f"sig_y MAE: {results['sig_y_mae']:.4f}")
-        print(f"mu RMSE: {results['mu_rmse']:.4f}")
-        print(f"sig_y RMSE: {results['sig_y_rmse']:.4f}")
-
-    return results
 
 def summarize_runs(results):
-    keys = [
-        "mu_mae",
-        "sig_y_mae",
-        "mu_rmse",
-        "sig_y_rmse",
-    ]
+    value = results[0]["sig_y_mae"]
 
-    print("\nMulti-run summary:")
-
-    for key in keys:
-        values = np.array([result[key] for result in results])
-
-        print(
-            f"{key}: "
-            f"{values.mean():.4f} ± {values.std(ddof=1):.4f}"
-        )
-
-def make_diagnostic_plots(y_pred, y_true, output_filename):
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
-
-    axes[0].scatter(y_true[:, 0], y_pred[:, 0], s=5)
-    axes[0].set_xlabel("True mu [um]")
-    axes[0].set_ylabel("Predicted mu [um]")
-    axes[0].set_title("mu prediction")
-
-    axes[1].scatter(y_true[:, 1], y_pred[:, 1], s=5)
-    axes[1].set_xlabel("True sig_y [um]")
-    axes[1].set_ylabel("Predicted sig_y [um]")
-    axes[1].set_title("sig_y prediction")
-
-    plt.tight_layout()
-    plt.savefig(output_filename, dpi=300)
-    plt.close()
-
-def plot_training_history(history, output_filename):
-    epochs = np.arange(1, len(history.history["loss"]) + 1)
-
-    plt.figure()
-    plt.scatter(epochs, history.history["loss"], label="training loss")
-    plt.scatter(epochs, history.history["val_loss"], label="validation loss")
-
-    plt.xlabel("Epoch")
-    plt.ylabel("MSE loss")
-    plt.title("Training convergence")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(output_filename, dpi=300)
-    plt.close()
-
-def summarize_array(name, array):
-    print(f"{name} shape: {array.shape}")
-    print(f"{name} dtype: {array.dtype}")
+    print(f"Roster sig_y MAE: {value:.4f}")
 
 def main():
     args = parse_args()
@@ -221,36 +147,38 @@ def main():
     X_train, y_train = load_data(args.training_data)
     X_val, y_val = load_data(args.validation_data)
 
-    summarize_array("X_train", X_train)
-    summarize_array("y_train", y_train)
-    summarize_array("X_val", X_val)
-    summarize_array("y_val", y_val)
+    channel_selection = load_channel_selections(args.channel_selections)
 
-    seeds = [101, 102, 103, 104, 105]
-    results = []
+    #seeds = [101, 102, 103, 104, 105]
+    seeds = [101]
 
-    for i,seed in enumerate(seeds):
-        print(f"\nTraining run with seed {seed}")
+    for roster_idx, channel_roster in enumerate(channel_selection):
+        results = []
 
-        result = train_one_model(
-            X_train=X_train,
-            X_val=X_val,
-            y_train=y_train,
-            y_val=y_val,
-            seed=seed,
-            epochs=args.epochs,
-            batch_size=args.batch_size,
-            make_plots=(i==0),
-        )
+        X_train_masked = mask_x_data_by_channel_selection(X_train, channel_roster)
+        X_val_masked = mask_x_data_by_channel_selection(X_val, channel_roster)
 
-        results.append(result)
-        
-        print(f"mu MAE: {result['mu_mae']:.4f}")
-        print(f"sig_y MAE: {result['sig_y_mae']:.4f}")
-        print(f"mu RMSE: {result['mu_rmse']:.4f}")
-        print(f"sig_y RMSE: {result['sig_y_rmse']:.4f}")
+        print(f"\nChannel roster {roster_idx}")
+        print(f"channels: {channel_roster}")
 
-    summarize_runs(results)
+        for i,seed in enumerate(seeds):
+
+            print(f"\nTraining run with seed {seed}")
+            result = train_one_model(
+                X_train=X_train_masked,
+                X_val=X_val_masked,
+                y_train=y_train,
+                y_val=y_val,
+                seed=seed,
+                epochs=args.epochs,
+                batch_size=args.batch_size,
+            )
+
+            results.append(result)
+            
+            print(f"sig_y MAE: {result['sig_y_mae']:.4f}")
+
+        summarize_runs(results)
 
 if __name__ == "__main__":
     main()
