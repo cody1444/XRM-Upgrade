@@ -152,6 +152,8 @@ def main():
     #seeds = [101, 102, 103, 104, 105]
     seeds = [101]
 
+    all_results = []
+
     for roster_idx, channel_roster in enumerate(channel_selection):
         results = []
 
@@ -179,6 +181,26 @@ def main():
             print(f"sig_y MAE: {result['sig_y_mae']:.4f}")
 
         summarize_runs(results)
+        all_results.append({
+            "roster_idx": roster_idx,
+            "channels": channel_roster,
+            "sig_y_mae": results[0]["sig_y_mae"],
+        })
+    np.savez(
+        "roster_results.npz",
+        roster_idx=np.array([
+            result["roster_idx"]
+            for result in all_results
+        ]),
+        channels=np.array([
+            result["channels"]
+            for result in all_results
+        ]),
+        sig_y_mae=np.array([
+            result["sig_y_mae"]
+            for result in all_results
+        ]),
+    )
 
 if __name__ == "__main__":
     main()
