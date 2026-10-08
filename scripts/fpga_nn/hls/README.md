@@ -31,6 +31,86 @@ conversion) and `data/hls/<name>_18bit/` (the one for the FPGA). Both are
 fully parallel (`io_parallel`, Latency strategy, reuse factor 1), clock
 5 ns (200 MHz).
 
+## The core: normalization + network (`hls/core/`)
+
+`xrm_nn_core` is the IP core for the firmware. It takes the **16 raw
+channel amplitudes** (ADC, channels 12–27), divides them by their sum and
+runs the network:
+
+```
+raw[16] ─► sum ─► 1/sum (one divider) ─► raw[i] × 1/sum (16 DSPs) ─► network ─► σ_y, μ (µm)
+```
+
+If the sum is below 512 ADC (no beam), both outputs are 0.
+
+| Port | Type | Meaning |
+|---|---|---|
+| `raw` (one 320-bit port, + valid) | 16 × `ap_fixed<20,14>` | amplitudes in ADC, ±8192, 1/64 ADC steps (real data: 41–3041) |
+| `out_0`, `out_1` (+ valid) | `ap_fixed<18,9>` | σ_y and μ in µm |
+| `ap_clk`, `ap_rst`, `ap_start`, `ap_done`, `ap_ready`, `ap_idle` | | clock, reset, HLS block handshake |
+
+Pipelined: one bunch per clock. The input type is a guess until the
+firmware's amplitude format is known; it is one `typedef` in
+`xrm_nn_core.h` (`raw_t`), with the sum and reciprocal types next to it.
+
+`convert_hls4ml.py` copies the core into the 18-bit project with 2000 real
+held-out bunches as test vectors (`tb_data/core_input.dat`, raw amplitudes;
+`tb_data/core_expected.dat`, Keras σ_y and μ), and checks it with g++. The
+testbench `xrm_nn_core_test.cpp` fails if any output is off by more than
+0.25 µm or if the no-beam input doesn't give 0.
+
+**On the lab machine** (Vitis HLS 2023.1), after copying the regenerated
+project folder over:
+
+```bash
+source /opt/Xilinx/Vitis_HLS/2023.1/settings64.sh && source /opt/Xilinx/Vivado/2023.1/settings64.sh
+cd .../centre_12_27_deviations_18bit
+vitis_hls -f build_core.tcl                       # csim, synthesis, co-simulation, IP export
+```
+
+| Step | Result |
+|---|---|
+| C simulation | `PASSED`/`FAILED` in the log; outputs in `tb_data/core_csim_results.log` |
+| Synthesis | `xrm_nn_core_prj/solution1/syn/report/xrm_nn_core_csynth.rpt` |
+| Co-simulation (the Verilog, same testbench) | `PASSED`/`FAILED` in the log; `xrm_nn_core_prj/solution1/sim/report/xrm_nn_core_cosim.rpt` |
+| IP export | `xrm_nn_core_prj/solution1/impl/ip/` (`component.xml` + HDL): add this folder as an IP repository in Vivado (Settings → IP → Repository) |
+
+Steps can be skipped, e.g. `vitis_hls -f build_core.tcl "cosim=0 export=0"`.
+
+`build_core.tcl` keeps the network a separate block (`set_directive_inline
+-off myproject`). Without that, Vitis inlines it into the core, the
+per-layer multiplier limits hls4ml sets merge into the smallest one, and the
+whole network shares 48 multipliers: a new bunch only every 65 clocks.
+
+**Checked on the Virtex-7 stand-in** (Vitis HLS 2025.2, 2026-10-07): C
+simulation and C/RTL co-simulation both PASS on 2000 real bunches (σ_y
+0.028 µm rms, 0.062 µm max from Keras; μ 0.016 µm rms; no-beam → 0); one
+bunch per clock; latency 77 cycles (network 32, the rest mostly the
+divider); 2066 DSPs (network 2050 + normalization 16); IP export works.
+
+**Built for the ZCU216** (xczu49dr-ffvf1760-2-e, Vitis HLS 2023.1 on the
+lab machine, 2026-10-07): C simulation and C/RTL co-simulation PASS (same
+2000 bunches and errors as above).
+
+| | Core (normalization + network) | Network alone | Of the xczu49dr |
+|---|---|---|---|
+| Latency | 55 cycles = 275 ns | 14 cycles = 70 ns | |
+| New bunch accepted every | 1 cycle (5 ns) | 1 cycle | |
+| Estimated clock period | 3.64 ns (target 5 ns) | 3.39 ns | meets 200 MHz |
+| DSP | 2,066 | 2,050 | 48% of 4,272 |
+| LUT | 72,343 | 70,280 | 17% of 425,280 |
+| FF | 39,255 | 36,058 | 4.6% of 850,560 |
+| BRAM / URAM | 0 | 0 | |
+
+(HLS estimates.) The normalization costs 16 DSPs and about 40 cycles of
+latency, almost all of it the divider.
+
+On that machine (Ubuntu with a newer glibc), Vivado 2023.1's own linker
+can't read the system libraries (`unknown type [0x13] section .relr.dyn`),
+so C simulation and co-simulation fail to link. Fixed there by pointing
+`/opt/Xilinx/Vivado/2023.1/tps/lnx64/binutils-2.37/bin/ld` at `/usr/bin/ld`
+(original kept as `ld.orig`). Synthesis and export don't need it.
+
 ## Fixed-point precision (18-bit version)
 
 Chosen from the value ranges on real data, with about 2× headroom

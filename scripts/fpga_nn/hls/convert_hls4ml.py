@@ -18,10 +18,19 @@ real held-out bunches, for two fixed-point choices:
            the value ranges (see PRECISION_18)
 
 Input: the 16 channel amplitudes divided by their sum. Output: sigma_y and
-mu in um. Projects go to data/hls/<name>_<choice>/.
+mu in um. Projects go to data/hls/<name>_<choice>/, with test vectors (real
+held-out bunches) in tb_data/.
+
+The 18-bit project also gets the full core from hls/core/: xrm_nn_core,
+which takes the 16 raw amplitudes, divides them by their sum and runs the
+network, with its own self-checking testbench and build script
+(build_core.tcl: C simulation, synthesis, co-simulation, IP export). The core
+is checked here in C with g++ before anything goes to the lab machine.
 """
 
 import argparse
+import shutil
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -29,6 +38,8 @@ import hls4ml
 from tensorflow import keras
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+CORE_DIR = Path(__file__).resolve().parent / "core"
+N_TB = 2000                       # test vectors per project (co-simulation runs them all)
 PART = "xczu49dr-ffvf1760-2-e"    # ZCU216
 
 # Per stage: (weight, bias, result) precision, plus the input.
@@ -105,6 +116,28 @@ def compare(label, pred, ref):
     return err
 
 
+def install_core(project, d):
+    """Copy the core into the project with its test vectors, and run its testbench with g++."""
+    shutil.copy(CORE_DIR / "xrm_nn_core.h", project / "firmware")
+    shutil.copy(CORE_DIR / "xrm_nn_core.cpp", project / "firmware")
+    shutil.copy(CORE_DIR / "xrm_nn_core_test.cpp", project)
+    shutil.copy(CORE_DIR / "build_core.tcl", project)
+    (project / "tb_data").mkdir(exist_ok=True)
+    np.savetxt(project / "tb_data" / "core_input.dat", d["check_raw"][:N_TB], fmt="%.6f")
+    np.savetxt(project / "tb_data" / "core_expected.dat", d["check_y"][:N_TB], fmt="%.6f")
+
+    exe = "xrm_nn_core_csim"
+    subprocess.run(["g++", "-O2", "-std=c++11", "-Ifirmware/ap_types", "-Ifirmware",
+                    '-DWEIGHTS_DIR="firmware/weights"', "xrm_nn_core_test.cpp",
+                    "firmware/xrm_nn_core.cpp", "firmware/myproject.cpp", "-o", exe],
+                   cwd=project, check=True)
+    result = subprocess.run([f"./{exe}"], cwd=project, capture_output=True, text=True)
+    (project / exe).unlink()
+    print("Core (normalization + network), C simulation with g++:")
+    print("  " + result.stdout.strip().replace("\n", "\n  "))
+    return result.returncode == 0
+
+
 def main():
     args = parse_args()
     network = Path(args.network)
@@ -118,11 +151,17 @@ def main():
     print(f"Rebuilt network ({network.name}) vs original on {len(x)} real bunches: max difference "
           f"{np.abs(keras2 - ref).max():.2e} um")
 
+    # Test vectors for hls4ml's own testbench (the network alone)
+    tb_input, tb_output = DATA_DIR / "hls" / f"{network.stem}_tb_input.npy", DATA_DIR / "hls" / f"{network.stem}_tb_output.npy"
+    np.save(tb_input, x[:N_TB])
+    np.save(tb_output, ref[:N_TB].astype(np.float32))
+
     for choice in ("wide", "18bit"):
         output_dir = DATA_DIR / "hls" / f"{network.stem}_{choice}"
         hls_model = hls4ml.converters.convert_from_keras_model(
             model, hls_config=hls_config(model, choice), output_dir=str(output_dir),
-            backend="Vitis", part=PART, io_type="io_parallel")
+            backend="Vitis", part=PART, io_type="io_parallel",
+            input_data_tb=str(tb_input), output_data_tb=str(tb_output))
         hls_model.compile()
         pred = hls_model.predict(x).reshape(ref.shape)
         print(f"\n{choice}: HLS C simulation vs Keras ({output_dir})")
@@ -130,6 +169,9 @@ def main():
         spread_keras = 1.4826 * np.median(np.abs(ref[:, 0] - fit_sigma - np.median(ref[:, 0] - fit_sigma)))
         spread_hls = 1.4826 * np.median(np.abs(pred[:, 0] - fit_sigma - np.median(pred[:, 0] - fit_sigma)))
         print(f"  network - offline fit, per-bunch spread: Keras {spread_keras:.3f} um, HLS {spread_hls:.3f} um")
+
+        if choice == "18bit" and not install_core(output_dir, d):
+            raise SystemExit("Core check FAILED")
 
 
 if __name__ == "__main__":

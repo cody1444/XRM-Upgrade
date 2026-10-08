@@ -16,8 +16,8 @@ amplitudes divided by their sum and returns sigma_y and mu in um:
     last layer:   (W h + b) * scale + centre
                =  (W * scale) h + (b * scale + centre)
 
-Also saves real held-out bunches (inputs and the original network's
-outputs) to check the HLS version against.
+Also saves real held-out bunches (raw amplitudes, network inputs and the
+original network's outputs) to check the HLS version against.
 """
 
 import argparse
@@ -65,6 +65,7 @@ def main():
     held_out = list(np.load(DEFAULT_CALIBRATION)["held_out_sweeps"])[::2]
     amps, fit_sigma, _, _, _ = load_real(held_out)
     pick = np.random.default_rng(0).choice(len(amps), size=min(args.n_check, len(amps)), replace=False)
+    raw = amps[pick][:, roster]
     x = normalize(amps[pick], roster)
     original = model.predict((x - mean) / std, verbose=0, batch_size=4096) * scale + centre
 
@@ -82,7 +83,8 @@ def main():
     out.parent.mkdir(parents=True, exist_ok=True)
     arrays = {f"w{i}": w for i, (w, _) in enumerate(weights)} | {f"b{i}": b for i, (_, b) in enumerate(weights)}
     np.savez(out, **arrays, activations=np.array(activations), roster=roster,
-             check_x=x.astype(np.float32), check_y=original.astype(np.float32), check_fit_sigma=fit_sigma[pick],
+             check_raw=raw.astype(np.float32), check_x=x.astype(np.float32),
+             check_y=original.astype(np.float32), check_fit_sigma=fit_sigma[pick],
              source=str(model_dir / f"{args.roster}.keras"))
     print(f"Saved {out}")
 
