@@ -67,7 +67,36 @@ C synthesis, **on a Virtex-7 stand-in** (xc7vx690t-2; see below):
 | LUT | 65,240 | ~15% of 425,280 |
 | FF | 213,934 | ~25% of 850,560 |
 
-These are HLS estimates, before Vivado implementation.
+C synthesis **for the ZCU216** (xczu49dr-ffvf1760-2-e, Vitis HLS 2023.1 on
+the lab machine, same project):
+
+| | Value | Of the xczu49dr |
+|---|---|---|
+| Latency | 14 cycles = 70 ns | |
+| New bunch accepted every | 1 cycle (5 ns) | |
+| Estimated clock period | 3.39 ns (target 5 ns, 1.35 ns uncertainty) | meets 200 MHz |
+| DSP | 2,050 | 47% of 4,272 |
+| LUT | 70,280 | 16% of 425,280 |
+| FF | 36,058 | 4% of 850,560 |
+| BRAM / URAM | 0 / 0 | |
+
+Shorter latency and far fewer flip-flops than on the Virtex-7: UltraScale+
+DSPs are faster, so fewer pipeline registers are needed.
+
+Vivado 2023.1 synthesis of the same design (`vsynth=1`; utilization after
+`synth_design` + `opt_design`, from `vivado_synth.rpt`):
+
+| | HLS estimate | Vivado post-synthesis | Of the xczu49dr |
+|---|---|---|---|
+| DSP (DSP48E2) | 2,050 | 2,050 | 48% |
+| LUT | 70,280 | 36,117 | 8.5% |
+| FF | 36,058 | 26,590 | 3.1% |
+| CARRY8 | — | 4,327 | 8.1% |
+| BRAM / URAM / LUT as memory | 0 | 0 | 0% |
+
+hls4ml's Vivado step reports utilization only, not timing: the 200 MHz
+figure is still the HLS estimate (3.39 ns). A timing check needs Vivado
+synthesis with a 5 ns clock constraint and a timing summary.
 
 ## Tool notes
 
