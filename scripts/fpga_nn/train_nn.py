@@ -49,6 +49,9 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--rosters", nargs="+", default=list(ROSTERS), choices=list(ROSTERS))
+    parser.add_argument("--factors", action="store_true", help="Generator extra: channel factors.")
+    parser.add_argument("--deviations", action="store_true", help="Generator extra: donors' real deviations.")
+    parser.add_argument("--output-dir", default=str(OUTPUT_DIR), help="Folder for the trained networks.")
     return parser.parse_args()
 
 
@@ -110,12 +113,14 @@ def evaluate_real(label, pred_sigma, fit_sigma, sweep_idx, cmos):
 
 def main():
     args = parse_args()
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
     keras.utils.set_random_seed(args.seed)
     print("TensorFlow", tf.__version__, "GPUs:", tf.config.list_physical_devices("GPU"))
 
     rng = np.random.default_rng(args.seed)
-    gen = XrmGenerator(DEFAULT_CALIBRATION, rng)
+    gen = XrmGenerator(DEFAULT_CALIBRATION, rng, args.factors, args.deviations)
+    print(f"Generator: factors {'on' if args.factors else 'off'}, deviations {'on' if args.deviations else 'off'}")
     real_lo, real_hi = gen.donor_params[:, 1].min(), gen.donor_params[:, 1].max()
 
     print(f"Generating {args.n_train} training and {args.n_val} validation bunches...", flush=True)
@@ -159,11 +164,12 @@ def main():
             pred_real = model.predict(x_real, verbose=0, batch_size=4096) * LABEL_SCALE + LABEL_CENTRE
             evaluate_real(label, pred_real[:, 0], fit_sigma, sweep_idx, cmos)
 
-        model.save(OUTPUT_DIR / f"{name}.keras")
-        np.savez(OUTPUT_DIR / f"{name}_scaler.npz", roster=np.array(roster), mean=mean, std=std,
+        model.save(output_dir / f"{name}.keras")
+        np.savez(output_dir / f"{name}_scaler.npz", roster=np.array(roster), mean=mean, std=std,
+                 factors=args.factors, deviations=args.deviations,
                  label_centre=LABEL_CENTRE, label_scale=LABEL_SCALE)
 
-    print(f"\nModels saved in {OUTPUT_DIR}")
+    print(f"\nModels saved in {output_dir}")
 
 
 if __name__ == "__main__":

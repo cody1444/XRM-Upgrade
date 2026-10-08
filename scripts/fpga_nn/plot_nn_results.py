@@ -40,9 +40,9 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_model(name):
-    scaler = np.load(OUTPUT_DIR / f"{name}_scaler.npz")
-    model = keras.models.load_model(OUTPUT_DIR / f"{name}.keras")
+def load_model(name, model_dir=OUTPUT_DIR):
+    scaler = np.load(model_dir / f"{name}_scaler.npz")
+    model = keras.models.load_model(model_dir / f"{name}.keras")
 
     def predict(amplitudes):
         x = (normalize(amplitudes, list(scaler["roster"])) - scaler["mean"]) / scaler["std"]

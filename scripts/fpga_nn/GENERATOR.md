@@ -24,6 +24,24 @@ python xrm_generator.py validate           # compare fakes of real bunches with 
 python xrm_generator.py generate -n 100000 --sigma-min 10 --sigma-max 200 -o train.npz
 ```
 
+Two optional extras make the fake bunches more realistic; both are off by
+default (the benchmark). `generate`, `validate`, `train_nn.py` and
+`explain_one_bunch.py` all take them:
+
+| Switch | What it adds | Why (see step) |
+|---|---|---|
+| `--factors` | multiplies the template by a correction factor per channel | real channels read consistently −33% to +26% off the template (5) |
+| `--deviations` | adds the donor's real deviation: its real amplitudes minus what the generator makes for its own parameters | real bunches vary ~11% per channel from bunch to bunch (6) |
+
+```bash
+python xrm_generator.py generate -n 100000 --factors --deviations -o train_realistic.npz
+python train_nn.py --rosters centre_12_27 --factors --deviations --output-dir data/nn_factors_deviations
+```
+
+`train_nn.py` records the switches next to each network, and
+`plot_true_vs_predicted.py --model-dir ...` uses them to rebuild the
+matching generator.
+
 The output has the same keys as the old generator (`x_data`, `true_mu`,
 `true_sig_y`), so `train_simple_nn.py` can read it. It also has
 `in_real_sigma_range` (True where the bunch's beam size lies inside the
@@ -41,6 +59,8 @@ which itself needs `data/real/` from `build_real_dataset.py`.
                  └─ borrow its position, brightness, offset and image placement;
                     replace its σ_y with the requested one
  2. Template     ideal profile for those parameters
+                 └─ --factors: × a correction factor per channel
+                 └─ --deviations: + the donor's real deviation
  3. Firmware     × ~0.93 per channel + an offset + noise (1 ADC + 2%)
 ```
 
@@ -51,8 +71,8 @@ Steps 2–3 are the chain from ideal to what the FPGA sees:
  (ideal)                   (best real)                         (what the FPGA sees)
 ```
 
-`python explain_one_bunch.py --sigma 120` walks through these steps for a
-single bunch, printing every intermediate number per channel and drawing
+`python explain_one_bunch.py --sigma 120` (add `--factors` / `--deviations`
+as needed) walks through these steps for a single bunch, printing every intermediate number per channel and drawing
 each step (`data/explain_one_bunch.png`). It checks at the end that the
 result is identical to what the generator makes.
 
@@ -129,8 +149,8 @@ completely (15% → 0.3%). Whether these come from wrong gain constants or an
 imperfect template shape couldn't be told apart, but for one setup they act
 the same way.
 
-**The generator does not use the factors for now (2026-10-07)**, to keep
-it simple; they can be added back later (`archive/xrm_generator_factors.py`).
+**The factors are off by default (2026-10-07)**, to keep the generator
+simple; `--factors` switches them on.
 Networks trained without them (`archive/study_no_factors.py`, 3 seeds, log
 `data/no_factors.log`) are worse on real held-out sweeps: per-bunch spread
 vs fit 6.3 instead of 4.3 µm for centre 12–27, judged acceptable for now;
@@ -138,16 +158,17 @@ for every other 6–36 it is 10.6 instead of 5.6 µm and those networks read
 beams ~12 µm too large, so **without factors only the centre channels are
 usable**.
 
-### Step 6: bunch-to-bunch variation (tried, set aside for now)
+### Step 6: bunch-to-bunch variation (off by default, `--deviations`)
 Real bunches also differ from their own corrected template by about 11%
 per channel, differently from bunch to bunch. An earlier version copied
 that difference from a real donor bunch with a similar beam size onto each
 fake bunch (step 3 of 4). It was dropped on 2026-10-07 to keep the
-generator simple enough to verify by reading; it can be added back later.
-The step-3 versions of the generator, the walkthrough and the comparison
-below are in `archive/`. To use them, copy them back next to
-`xrm_raw.py` and rerun `calibrate` (the current calibration file has no
-deviations in it).
+generator simple enough to verify by reading, and came back as the
+`--deviations` switch. Two small differences from that version: donors are
+drawn at random instead of by matching σ_y (the donor still supplies its
+own position, brightness and placement, so its deviation fits those), and
+the scatter is the simple 1 ADC + 2% noise. The original version and the
+comparison below stay in `archive/` for the record.
 
 `archive/compare_deviation_step.py` trained the same network on both
 versions (3 seeds each, identical random draws) and tested it on 110 real
@@ -189,7 +210,7 @@ The reference result for this version of the generator: the centre
 tested on real data it never saw. Any change to the generator should be
 compared against these numbers in the same way.
 
-**Generator recipe:** random real bunch's fit parameters with σ_y replaced
+**Generator recipe** (both switches off, the default): random real bunch's fit parameters with σ_y replaced
 → plain template (no channel factors) → per-channel firmware gain and
 offset + independent noise of 1 ADC + 2%. Calibrated on the 219
 calibration sweeps of Dec 4–15.
@@ -224,11 +245,12 @@ python plot_true_vs_predicted.py                        # data/nn/true_vs_predic
 
 ## Limits
 
-- **No channel factors (2026-10-07):** real channels read consistently
-  −33% to +26% off the template; the generator ignores this. Fine enough
-  for the centre 16 channels, not for wider channel sets (step 5).
-- **No bunch-to-bunch variation (2026-10-07):** fake bunches are smooth
-  templates plus small independent noise (1 ADC + 2%). Real bunches vary
+- **Default: no channel factors (2026-10-07):** real channels read consistently
+  −33% to +26% off the template; by default the generator ignores this.
+  Fine enough for the centre 16 channels, not for wider channel sets
+  (step 5). `--factors` fixes it.
+- **Default: no bunch-to-bunch variation (2026-10-07):** fake bunches are smooth
+  templates plus small independent noise (1 ADC + 2%); `--deviations` adds it. Real bunches vary
   by ~11% per channel around their template, with neighbouring channels
   moving together. See step 6 for what this costs.
 - **Beam size range (accepted for now, 2026-10-05):** the monitor should
